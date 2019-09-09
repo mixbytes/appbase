@@ -23,26 +23,25 @@ public:
    template <typename Function>
    void add(int priority, Function function)
    {
-      std::unique_ptr<queued_handler_base> handler(new queued_handler<Function>(priority, --order_, std::move(function)));
-
-      handlers_.push(std::move(handler));
+      std::lock_guard<std::mutex> guard(handlers_mutex_);
+      std::shared_ptr<queued_handler_base> handler(new queued_handler<Function>(priority, --order_, std::move(function)));
+      handlers_.push(handler);
    }
 
    void execute_all()
    {
-      while (!handlers_.empty()) {
-         handlers_.top()->execute();
-         handlers_.pop();
+      while (auto top = get_top_handler()) {
+         (*top)->execute();
       }
    }
 
    bool execute_highest()
    {
-      if( !handlers_.empty() ) {
-         handlers_.top()->execute();
-         handlers_.pop();
+      if( auto top = get_top_handler() ) {
+         (*top)->execute();
       }
 
+      std::lock_guard<std::mutex> guard(handlers_mutex_);
       return !handlers_.empty();
    }
 
@@ -152,6 +151,17 @@ private:
       Function function_;
    };
 
+   // get top handler and pop it
+   boost::optional<std::shared_ptr<queued_handler_base>> get_top_handler() {
+      std::lock_guard<std::mutex> guard(handlers_mutex_);
+      if (handlers_.empty()) {
+         return boost::none;
+      }
+      auto handler = handlers_.top();
+      handlers_.pop();
+      return handler;
+   };
+
    struct deref_less
    {
       template<typename Pointer>
@@ -161,8 +171,9 @@ private:
       }
    };
 
-   std::priority_queue<std::unique_ptr<queued_handler_base>, std::deque<std::unique_ptr<queued_handler_base>>, deref_less> handlers_;
+   std::priority_queue<std::unique_ptr<queued_handler_base>, std::deque<std::shared_ptr<queued_handler_base>>, deref_less> handlers_;
    std::size_t order_ = std::numeric_limits<size_t>::max(); // to maintain FIFO ordering in queue within priority
+   std::mutex handlers_mutex_;
 };
 
 } // appbase
